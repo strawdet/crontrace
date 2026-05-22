@@ -2,79 +2,69 @@ package store
 
 import (
 	"database/sql"
-	"fmt"
 	"time"
 )
 
-// JobRun represents a single recorded execution of a cron job.
+// JobRun represents a single execution record of a cron job.
 type JobRun struct {
-	ID         int64
-	Command    string
-	StartedAt  time.Time
-	FinishedAt *time.Time
-	DurationMs *int64
-	ExitCode   *int
-	Stdout     string
-	Stderr     string
+	ID        int64
+	Command   string
+	StartedAt time.Time
+	EndedAt   *time.Time
+	ExitCode  int
+	Output    string
 }
 
-// JobRunRepository handles persistence of JobRun records.
+// JobRunRepository provides persistence for JobRun records.
 type JobRunRepository struct {
 	db *sql.DB
 }
 
 // NewJobRunRepository creates a new repository backed by db.
-func NewJobRunRepository(db *DB) *JobRunRepository {
-	return &JobRunRepository{db: db.Conn()}
+func NewJobRunRepository(db *sql.DB) *JobRunRepository {
+	return &JobRunRepository{db: db}
 }
 
 // Insert persists a new JobRun and sets its ID.
 func (r *JobRunRepository) Insert(run *JobRun) error {
-	const q = `
-	INSERT INTO job_runs (command, started_at, finished_at, duration_ms, exit_code, stdout, stderr)
-	VALUES (?, ?, ?, ?, ?, ?, ?)`
-
+	const q = `INSERT INTO job_runs (command, started_at, ended_at, exit_code, output)
+		VALUES (?, ?, ?, ?, ?)`
 	res, err := r.db.Exec(q,
 		run.Command,
-		run.StartedAt.UTC(),
-		nullTime(run.FinishedAt),
-		run.DurationMs,
+		run.StartedAt.UTC().Format(time.RFC3339Nano),
+		nullTime(run.EndedAt),
 		run.ExitCode,
-		run.Stdout,
-		run.Stderr,
+		run.Output,
 	)
 	if err != nil {
-		return fmt.Errorf("inserting job run: %w", err)
+		return err
 	}
-	run.ID, _ = res.LastInsertId()
-	return nil
+	run.ID, err = res.LastInsertId()
+	return err
 }
 
-// ListByCommand returns the most recent `limit` runs for the given command.
-func (r *JobRunRepository) ListByCommand(command string, limit int) ([]JobRun, error) {
-	const q = `
-	SELECT id, command, started_at, finished_at, duration_ms, exit_code, stdout, stderr
-	FROM job_runs WHERE command = ?
-	ORDER BY started_at DESC LIMIT ?`
-
-	rows, err := r.db.Query(q, command, limit)
+// List returns the most recent limit job runs, newest first.
+func (r *JobRunRepository) List(limit int) ([]JobRun, error) {
+	const q = `SELECT id, command, started_at, ended_at, exit_code, output
+		FROM job_runs ORDER BY started_at DESC LIMIT ?`
+	rows, err := r.db.Query(q, limit)
 	if err != nil {
-		return nil, fmt.Errorf("querying job runs: %w", err)
+		return nil, err
 	}
 	defer rows.Close()
 
 	var runs []JobRun
 	for rows.Next() {
 		var run JobRun
-		var finishedAt sql.NullTime
-		if err := rows.Scan(
-			&run.ID, &run.Command, &run.StartedAt, &finishedAt,
-			&run.DurationMs, &run.ExitCode, &run.Stdout, &run.Stderr,
-		); err != nil {
-			return nil, fmt.Errorf("scanning job run: %w", err)
+		var startedStr string
+		var endedStr sql.NullString
+		if err := rows.Scan(&run.ID, &run.Command, &startedStr, &endedStr, &run.ExitCode, &run.Output); err != nil {
+			return nil, err
 		}
-		if finishedAt.Valid {
-			run.FinishedAt = &finishedAt.Time
+		run.StartedAt, _ = time.Parse(time.RFC3339Nano, startedStr)
+		if endedStr.Valid {
+			t, _ := time.Parse(time.RFC3339Nano, endedStr.String)
+			run.EndedAt = &t
 		}
 		runs = append(runs, run)
 	}
@@ -85,5 +75,5 @@ func nullTime(t *time.Time) interface{} {
 	if t == nil {
 		return nil
 	}
-	return t.UTC()
+	return t.UTC().Format(time.RFC3339Nano)
 }
