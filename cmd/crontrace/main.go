@@ -1,89 +1,98 @@
 package main
 
 import (
-	"flag"
 	"fmt"
-	"log"
 	"os"
-	"path/filepath"
-	"time"
 
 	"github.com/user/crontrace/internal/cli"
-	"github.com/user/crontrace/internal/runner"
 	"github.com/user/crontrace/internal/store"
 )
 
 const defaultDBPath = ".crontrace.db"
 
 func main() {
-	homedir, err := os.UserHomeDir()
-	if err != nil {
-		log.Fatalf("home dir: %v", err)
+	dbPath := os.Getenv("CRONTRACE_DB")
+	if dbPath == "" {
+		dbPath = defaultDBPath
 	}
-	defaultDB := filepath.Join(homedir, defaultDBPath)
 
-	dbPath := flag.String("db", defaultDB, "path to SQLite database")
-	flag.Parse()
-
-	args := flag.Args()
-	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: crontrace [options] <subcommand> [args]")
-		fmt.Fprintln(os.Stderr, "subcommands: run, list, stats, prune")
+	db, err := store.Open(dbPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: open db: %v\n", err)
 		os.Exit(1)
-	}
-
-	db, err := store.Open(*dbPath)
-	if err != nil {
-		log.Fatalf("open db: %v", err)
 	}
 	defer db.Close()
 
-	switch args[0] {
+	if len(os.Args) < 2 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	switch os.Args[1] {
 	case "run":
-		if len(args) < 2 {
+		if len(os.Args) < 3 {
 			fmt.Fprintln(os.Stderr, "usage: crontrace run <command> [args...]")
 			os.Exit(1)
 		}
-		repo := store.NewJobRunRepository(db)
-		exitCode, runErr := runner.Run(repo, args[1], args[2:]...)
-		if runErr != nil {
-			fmt.Fprintf(os.Stderr, "run error: %v\n", runErr)
+		repo, err := store.NewJobRunRepository(db)
+		if err != nil {
+			fatalf("job run repo: %v", err)
 		}
-		os.Exit(exitCode)
-
+		code, err := cli.Run(repo, os.Args[2], os.Args[3:])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		}
+		os.Exit(code)
 	case "list":
-		listCmd := flag.NewFlagSet("list", flag.ExitOnError)
-		limit := listCmd.Int("n", 20, "max number of runs to show")
-		command := listCmd.String("command", "", "filter by command")
-		listCmd.Parse(args[1:])
-		if err := cli.ListRuns(db, *command, *limit); err != nil {
-			log.Fatalf("list: %v", err)
+		if err := cli.ListRuns(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
 		}
-
 	case "stats":
-		if err := cli.PrintStats(db); err != nil {
-			log.Fatalf("stats: %v", err)
+		if err := cli.PrintStats(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
 		}
-
 	case "prune":
-		pruneCmd := flag.NewFlagSet("prune", flag.ExitOnError)
-		olderThanStr := pruneCmd.String("older-than", "", "delete runs older than this duration (e.g. 720h)")
-		command := pruneCmd.String("command", "", "delete all runs for this command")
-		pruneCmd.Parse(args[1:])
-
-		var olderThan time.Duration
-		if *olderThanStr != "" {
-			olderThan, err = time.ParseDuration(*olderThanStr)
-			if err != nil {
-				log.Fatalf("invalid duration %q: %v", *olderThanStr, err)
-			}
+		if err := cli.PruneRuns(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
 		}
-		if err := cli.PruneRuns(db, olderThan, *command); err != nil {
-			log.Fatalf("prune: %v", err)
+	case "export":
+		if err := cli.ExportRuns(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
 		}
-
+	case "tag":
+		if err := cli.ManageTags(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
+		}
+	case "notify":
+		if err := cli.ManageNotify(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
+		}
+	case "alert":
+		if err := cli.ManageAlerts(db, os.Args[2:]); err != nil {
+			fatalf("%v", err)
+		}
 	default:
-		fmt.Fprintf(os.Stderr, "unknown subcommand: %q\n", args[0])
+		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
+		printUsage()
 		os.Exit(1)
 	}
+}
+
+func fatalf(format string, args ...interface{}) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	os.Exit(1)
+}
+
+func printUsage() {
+	fmt.Fprintln(os.Stderr, `crontrace — cron job execution recorder
+
+Usage:
+  crontrace run <command> [args...]   Run a command and record its execution
+  crontrace list [--cmd=<cmd>]        List recorded job runs
+  crontrace stats [--cmd=<cmd>]       Show aggregated statistics
+  crontrace prune --older-than=<d>    Delete old records
+  crontrace export [--format=csv|json] Export records
+  crontrace tag <set|del|list> ...    Manage tags on job runs
+  crontrace notify <set|del|list> ... Manage notification rules
+  crontrace alert <set|del|list> ...  Manage threshold-based alert rules`)
 }
