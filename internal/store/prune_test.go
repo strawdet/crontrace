@@ -84,3 +84,23 @@ func TestPruneOlderThanNothingToDelete(t *testing.T) {
 		t.Errorf("expected 0 pruned rows, got %d", n)
 	}
 }
+
+func TestPruneByCommandNothingToDelete(t *testing.T) {
+	db := openTestDB(t)
+	jobRepo := store.NewJobRunRepository(db)
+	pruneRepo := store.NewPruneRepository(db)
+
+	_, err := jobRepo.Insert("echo hello", 0, time.Now(), time.Now())
+	if err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	// Prune a command that doesn't exist in the DB
+	n, err := pruneRepo.PruneByCommand("nonexistent command")
+	if err != nil {
+		t.Fatalf("prune by command: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 pruned rows, got %d", n)
+	}
+}
