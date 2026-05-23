@@ -14,7 +14,9 @@ func ExportRuns(db interface {
 	// Real implementation uses *sql.DB; see exportRuns below.
 }
 
-// ExportRunsFromDB exports job run history using a concrete *sql.DB.
+// ExportRunsFromDB opens the database at dbPath and exports job run history
+// to stdout. format must be either "csv" or "json". If command is non-empty,
+// only runs matching that command are exported.
 func ExportRunsFromDB(dbPath string, format string, command string) error {
 	db, err := store.Open(dbPath)
 	if err != nil {
@@ -24,6 +26,8 @@ func ExportRunsFromDB(dbPath string, format string, command string) error {
 	return exportRuns(store.NewExportRepository(db), format, command)
 }
 
+// exportRuns writes job run history from repo to stdout using the given format.
+// Supported formats are "csv" and "json". An empty command string exports all runs.
 func exportRuns(repo *store.ExportRepository, format string, command string) error {
 	switch format {
 	case "csv":
