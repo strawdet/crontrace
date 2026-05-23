@@ -83,3 +83,30 @@ func TestListReturnsEmpty(t *testing.T) {
 		t.Errorf("expected 0 runs, got %d", len(runs))
 	}
 }
+
+func TestListRespectsLimit(t *testing.T) {
+	db := openTestDB(t)
+	repo := store.NewJobRunRepository(db)
+
+	const command = "/usr/bin/backup.sh"
+	const total = 5
+	const limit = 3
+
+	for i := 0; i < total; i++ {
+		run := &store.JobRun{
+			Command:   command,
+			StartedAt: time.Now().UTC().Truncate(time.Second),
+		}
+		if err := repo.Insert(run); err != nil {
+			t.Fatalf("Insert run %d: %v", i, err)
+		}
+	}
+
+	runs, err := repo.ListByCommand(command, limit)
+	if err != nil {
+		t.Fatalf("ListByCommand: %v", err)
+	}
+	if len(runs) != limit {
+		t.Errorf("expected %d runs, got %d", limit, len(runs))
+	}
+}
